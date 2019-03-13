@@ -9,6 +9,7 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/api/admission/v1beta1"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -74,42 +75,54 @@ func updateAnnotation(target map[string]string, added map[string]string) (patch 
 	return patch
 }
 
-// createPatch creates a mutation patch for pod resource
-func createPatch(pod *corev1.Pod, annotations map[string]string) ([]byte, error) {
-	var patch []patchOperation
-	patch = append(patch, updateAnnotation(pod.Annotations, annotations)...)
-
-	return json.Marshal(patch)
-}
-
-func mutatePod(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
-
+func mutateObject(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
 	req := ar.Request
-	var pod corev1.Pod
-	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
-		glog.Errorf("Could not unmarshal raw object: %v", err)
+	var metadata *metav1.ObjectMeta
+	switch req.Kind.Kind {
+	case "Pod":
+		var pod corev1.Pod
+		if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
+			glog.Errorf("Could not unmarshal raw object: %v", err)
+			return &v1beta1.AdmissionResponse{
+				Result: &metav1.Status{
+					Message: err.Error(),
+				},
+			}
+		}
+		metadata = &pod.ObjectMeta
+	case "ReplicaSet":
+		var rs appsv1.ReplicaSet
+		if err := json.Unmarshal(req.Object.Raw, &rs); err != nil {
+			glog.Errorf("Could not unmarshal raw object: %v", err)
+			return &v1beta1.AdmissionResponse{
+				Result: &metav1.Status{
+					Message: err.Error(),
+				},
+			}
+		}
+		metadata = &rs.ObjectMeta
+	default:
+		glog.Warningf("Unsupported object: %v", ar.Request.Kind.Kind)
 		return &v1beta1.AdmissionResponse{
-			Result: &metav1.Status{
-				Message: err.Error(),
-			},
+			Allowed: true,
 		}
 	}
 
 	glog.V(3).Infof("AdmissionReview for Kind=%v, Namespace=%v Name=%v (%v) UID=%v patchOperation=%v UserInfo=%v",
-		req.Kind, req.Namespace, req.Name, pod.Name, req.UID, req.Operation, req.UserInfo)
+		req.Kind, req.Namespace, req.Name, metadata.Name, req.UID, req.Operation, req.UserInfo)
 
 	// determine whether to perform mutation
-	if !mutationRequired(&pod.ObjectMeta) {
-		glog.V(3).Infof("Skipping mutation for %s/%s due to policy check", pod.Namespace, pod.Name)
+	if !mutationRequired(metadata) {
+		glog.V(3).Infof("Skipping mutation for %s/%s due to policy check", metadata.Namespace, metadata.Name)
 		return &v1beta1.AdmissionResponse{
 			Allowed: true,
 		}
 	}
 
 	generatedSpanContext := GenerateEmbeddableSpanContext()
-	annotations := map[string]string{TraceAnnotationKey: generatedSpanContext}
+	annotations := updateAnnotation(metadata.Annotations, map[string]string{TraceAnnotationKey: generatedSpanContext})
 
-	patchBytes, err := createPatch(&pod, annotations)
+	patchBytes, err := json.Marshal(annotations)
 	if err != nil {
 		return &v1beta1.AdmissionResponse{
 			Result: &metav1.Status{
@@ -160,7 +173,7 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 			},
 		}
 	} else {
-		admissionResponse = mutatePod(&ar)
+		admissionResponse = mutateObject(&ar)
 	}
 
 	admissionReview := v1beta1.AdmissionReview{}

@@ -12,6 +12,6 @@ webhooks:
       caBundle: ${CA_BUNDLE}
     rules:
       - operations: [ "CREATE" ]
-        apiGroups: [""]
+        apiGroups: ["", "apps"]
         apiVersions: ["v1"]
-        resources: ["pods"]
+        resources: ["pods", "replicasets"]

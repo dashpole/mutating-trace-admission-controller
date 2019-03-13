@@ -11,7 +11,7 @@ spec:
     spec:
       containers:
         - name: trace-context-injector
-          image: k8s.gcr.io/trace-context-injector:latest
+          image: gcr.io/dashpole-gke-dev/trace-context-injector:v1
           imagePullPolicy: Always
           args:
             - -configPath=/etc/webhook/config/config.yaml
